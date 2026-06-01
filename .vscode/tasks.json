@@ -1,0 +1,106 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "PlatformIO: Build",
+            "type": "shell",
+            "command": "py",
+            "args": [
+                "-m",
+                "platformio",
+                "run",
+                "-e",
+                "DMMS"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$platformio"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "PlatformIO: Build & Upload",
+            "type": "shell",
+            "command": "py",
+            "args": [
+                "-m",
+                "platformio",
+                "run",
+                "-e",
+                "DMMS",
+                "-t",
+                "upload"
+            ],
+            "group": {
+                "kind": "build"
+            },
+            "problemMatcher": [
+                "$platformio"
+            ],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "PlatformIO: Serial Monitor",
+            "type": "shell",
+            "command": "py",
+            "args": [
+                "-m",
+                "platformio",
+                "device",
+                "monitor",
+                "-e",
+                "DMMS",
+                "-b",
+                "115200"
+            ],
+            "group": {
+                "kind": "test"
+            },
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": "^(.*)$",
+                    "file": 1
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^--- begin",
+                    "endsPattern": "^--- end"
+                }
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Run Sensor Glove GUI",
+            "type": "shell",
+            "command": "py",
+            "args": [
+                "gui/sensor_glove_gui.py"
+            ],
+            "group": {
+                "kind": "test"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "panel": "shared"
+            }
+        }
+    ]
+}

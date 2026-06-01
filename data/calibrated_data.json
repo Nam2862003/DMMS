@@ -1,0 +1,13 @@
+{
+  "flex": {
+    "sensors": {
+      "MIDDLE_DIP": {
+        "label": "Middle Finger DIP",
+        "angles": {
+          "0": 2381,
+          "45": 2023
+        }
+      }
+    }
+  }
+}
