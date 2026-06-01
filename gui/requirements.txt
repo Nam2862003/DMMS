@@ -1,1 +1,5 @@
 pyserial>=3.5
+
+```bash
+pip install pyserial
+```
