@@ -24,9 +24,9 @@ const int S3  = 32;
 const int SIG = 34;
 
 // === Mux channel assignments ===
-const int CH_FLEX_MP  = 8;
+const int CH_PRESSURE = 8;
 const int CH_FLEX_DIP = 7;
-const int CH_PRESSURE = 6;
+const int CH_FLEX_MP  = 6;
 
 // === Settings ===
 const int OVERSAMPLE    = 10;
@@ -67,7 +67,8 @@ enum StreamMode {
   STREAM_RAW,
   STREAM_MIXED,
   STREAM_FLEX,
-  STREAM_FSR
+  STREAM_FSR,
+  STREAM_MULTI_RAW
 };
 
 StreamMode streamMode = STREAM_NONE;
@@ -165,6 +166,9 @@ void handleCommand(String command) {
   } else if (command == "STREAM_FSR") {
     streamMode = STREAM_FSR;
     Serial.println(F("ACK,STREAM_FSR"));
+  } else if (command == "STREAM_MULTI_RAW") {
+    streamMode = STREAM_MULTI_RAW;
+    Serial.println(F("ACK,STREAM_MULTI_RAW"));
   } else if (command == "STOP") {
     streamMode = STREAM_NONE;
     Serial.println(F("ACK,STOP"));
@@ -294,6 +298,7 @@ void streamCurrentData() {
     case STREAM_MIXED: streamMixed(); break;
     case STREAM_FLEX:  streamFlex();  break;
     case STREAM_FSR:   streamFsr();   break;
+    case STREAM_MULTI_RAW: streamMultiRaw(); break;
     case STREAM_NONE:  break;
   }
 }
@@ -343,6 +348,21 @@ void streamFlex() {
 void streamFsr() {
   Serial.print(readMuxAveraged(CH_PRESSURE));
   Serial.println(F(",0,4095"));
+}
+
+void streamMultiRaw() {
+  // Order must match what the GUI expects.
+  // For each finger, DIP then MP.
+  // Example: MIDDLE_DIP, MIDDLE_MP, INDEX_DIP, INDEX_MP, RING_DIP, RING_MP
+  for (int i = 0; i < FLEX_SENSOR_COUNT; i++) {
+    if (flexSensorChannels[i] >= 0) {
+      Serial.print(readMuxAveraged(flexSensorChannels[i]));
+    } else {
+      Serial.print(0);  // placeholder for missing sensor
+    }
+    if (i < FLEX_SENSOR_COUNT - 1) Serial.print(',');
+  }
+  Serial.println();
 }
 
 int readMux(uint8_t channel) {

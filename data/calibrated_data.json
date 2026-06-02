@@ -4,8 +4,19 @@
       "MIDDLE_DIP": {
         "label": "Middle Finger DIP",
         "angles": {
-          "0": 2381,
-          "45": 2023
+          "0": 2432,
+          "45": 2000,
+          "90": 1669,
+          "180": 1408
+        }
+      },
+      "MIDDLE_MP": {
+        "label": "Middle Finger MP",
+        "angles": {
+          "0": 2348,
+          "45": 1916,
+          "90": 1706,
+          "180": 0
         }
       }
     }

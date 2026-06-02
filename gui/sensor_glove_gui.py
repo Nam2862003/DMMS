@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - shown in the GUI when launched by user
     serial = None
     list_ports = None
 
+import itertools
 
 BAUD_RATE = 115200
 MAX_POINTS = 240
@@ -40,18 +41,6 @@ STREAMS = {
         "labels": ("MP raw", "DIP raw", "FSR raw"),
         "y_min": 0.0,
         "y_max": 4095.0,
-    },
-    "Mixed view": {
-        "command": "STREAM_MIXED",
-        "labels": ("MP raw", "DIP angle", "FSR raw"),
-        "y_min": None,
-        "y_max": None,
-    },
-    "Flex angle": {
-        "command": "STREAM_FLEX",
-        "labels": ("Flex deg",),
-        "y_min": 0.0,
-        "y_max": 180.0,
     },
     "FSR raw": {
         "command": "STREAM_FSR",
@@ -211,6 +200,11 @@ class SensorGloveGUI(tk.Tk):
         self.active_stream_config = None
         self.last_plot_time = 0.0
 
+        self.multi_stream_active = False
+        self.active_multi_selection = []
+        self.active_multi_indices = []
+        self.last_multi_plot_time = 0.0
+
         self._load_calibration_data()
         self._build_ui()
         self.refresh_ports()
@@ -273,8 +267,9 @@ class SensorGloveGUI(tk.Tk):
 
         flex_tab = self.flex_settings
         flex_tab.columnconfigure(1, weight=1)
-        flex_tab.rowconfigure(2, weight=1)
+        flex_tab.rowconfigure(3, weight=1)
 
+        # Row 0 – sensor selector
         ttk.Label(flex_tab, text="Flex position").grid(row=0, column=0, sticky="w", padx=(0, 8))
         flex_sensor_combo = ttk.Combobox(
             flex_tab,
@@ -286,31 +281,35 @@ class SensorGloveGUI(tk.Tk):
         flex_sensor_combo.grid(row=0, column=1, sticky="w")
         flex_sensor_combo.bind("<<ComboboxSelected>>", lambda _event: self._refresh_flex_status())
 
-        ttk.Label(flex_tab, text="Angle").grid(row=0, column=2, sticky="w", padx=(12, 8))
+        # Row 1 – angle selector + action buttons
+        action_row = ttk.Frame(flex_tab)
+        action_row.grid(row=1, column=0, columnspan=6, sticky="w", pady=(8, 4))
+
+        ttk.Label(action_row, text="Angle").pack(side="left", padx=(0, 8))
         ttk.Combobox(
-            flex_tab,
+            action_row,
             textvariable=self.flex_angle,
             values=FLEX_ANGLES,
             state="readonly",
             width=12,
-        ).grid(row=0, column=3, sticky="w")
-        ttk.Button(flex_tab, text="Confirm / Save", command=self.save_flex_angle).grid(
-            row=0, column=4, sticky="w", padx=(12, 0)
-        )
-        ttk.Button(flex_tab, text="Clear Flex Calibration", command=self.clear_flex_calibration).grid(
-            row=0, column=5, sticky="w", padx=(8, 0)
-        )
+        ).pack(side="left", padx=(0, 20))
 
+        ttk.Button(action_row, text="Confirm / Save", command=self.save_flex_angle).pack(side="left", padx=(0, 8))
+        ttk.Button(action_row, text="Clear Flex Calibration", command=self.clear_flex_calibration).pack(side="left", padx=(0, 8))
+        ttk.Button(action_row, text="Load from JSON", command=self.load_flex_calibration_from_json).pack(side="left")
+
+        # Row 2 – saved points table
         table = ttk.LabelFrame(flex_tab, text="Saved flex points", padding=8)
-        table.grid(row=1, column=0, columnspan=6, sticky="ew", pady=(12, 10))
+        table.grid(row=2, column=0, columnspan=6, sticky="ew", pady=(12, 10))
         for col, text in enumerate(("Angle", "Status")):
             ttk.Label(table, text=text).grid(row=0, column=col, sticky="w", padx=(0, 24))
         for row, angle in enumerate(FLEX_ANGLES, start=1):
             ttk.Label(table, text=f"{angle} deg").grid(row=row, column=0, sticky="w", padx=(0, 24), pady=2)
             ttk.Label(table, textvariable=self.flex_status[angle]).grid(row=row, column=1, sticky="w", pady=2)
 
+        # Row 3 – serial log
         log_frame = ttk.LabelFrame(flex_tab, text="Serial log", padding=8)
-        log_frame.grid(row=2, column=0, columnspan=6, sticky="nsew")
+        log_frame.grid(row=3, column=0, columnspan=6, sticky="nsew")
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         self.log = tk.Text(log_frame, height=14, wrap="word", state="disabled", font=("Consolas", 10))
@@ -348,25 +347,160 @@ class SensorGloveGUI(tk.Tk):
         self.plot_tab.columnconfigure(0, weight=1)
         self.plot_tab.rowconfigure(1, weight=1)
 
-        controls = ttk.Frame(self.plot_tab)
-        controls.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        ttk.Label(controls, text="Stream").grid(row=0, column=0, sticky="w")
+        # ---- Single‑stream controls ----
+        single_frame = ttk.LabelFrame(self.plot_tab, text="Single sensor stream", padding=8)
+        single_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        single_controls = ttk.Frame(single_frame)
+        single_controls.pack(fill="x")
+        ttk.Label(single_controls, text="Stream").pack(side="left")
         stream_combo = ttk.Combobox(
-            controls,
+            single_controls,
             textvariable=self.current_stream,
             values=list(STREAMS.keys()),
             width=26,
             state="readonly",
         )
-        stream_combo.grid(row=0, column=1, padx=(8, 10))
-        ttk.Button(controls, text="Start Plot", command=self.start_stream).grid(row=0, column=2, padx=(0, 8))
-        ttk.Button(controls, text="Stop", command=self.stop_stream).grid(row=0, column=3, padx=(0, 14))
-        ttk.Label(controls, textvariable=self.latest_values).grid(row=0, column=4, sticky="w")
+        stream_combo.pack(side="left", padx=(8, 10))
+        ttk.Button(single_controls, text="Start Plot", command=self.start_stream).pack(side="left", padx=(0, 8))
+        ttk.Button(single_controls, text="Stop", command=self.stop_stream).pack(side="left", padx=(0, 14))
+        ttk.Label(single_controls, textvariable=self.latest_values).pack(side="left")
 
+        # Checkbuttons for raw sensor selection (only for Raw sensors stream)
+        raw_sel_frame = ttk.Frame(single_frame)
+        raw_sel_frame.pack(fill="x", pady=(5, 0))
+        self.raw_show_mp = tk.IntVar(value=1)
+        self.raw_show_dip = tk.IntVar(value=1)
+        self.raw_show_fsr = tk.IntVar(value=1)
+        ttk.Checkbutton(raw_sel_frame, text="MP", variable=self.raw_show_mp).pack(side="left", padx=5)
+        ttk.Checkbutton(raw_sel_frame, text="DIP", variable=self.raw_show_dip).pack(side="left", padx=5)
+        ttk.Checkbutton(raw_sel_frame, text="FSR", variable=self.raw_show_fsr).pack(side="left", padx=5)
+
+        # ---- Single‑stream plot canvas ----
         self.plot = PlotCanvas(self.plot_tab)
         self.plot.grid(row=1, column=0, sticky="nsew")
         initial = STREAMS[self.current_stream.get()]
         self.plot.reset(initial["labels"], initial["y_min"], initial["y_max"])
+
+        multi_frame = ttk.LabelFrame(self.plot_tab, text="Multi‑finger plot", padding=8)
+        multi_frame.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        multi_controls = ttk.Frame(multi_frame)
+        multi_controls.pack(fill="x")
+        ttk.Label(multi_controls, text="Tick joints to plot:").pack(side="left")
+        ttk.Button(multi_controls, text="Start Multi Plot", command=self.start_multi_stream).pack(side="left", padx=(8, 10))
+        ttk.Button(multi_controls, text="Stop", command=self.stop_stream).pack(side="left")
+
+        self.multi_vars = {}
+        fingers_order = ["INDEX", "MIDDLE", "RING"]   # adjust as needed
+        cb_frame = ttk.Frame(multi_frame)
+        cb_frame.pack(fill="x", pady=(8, 0))
+        row_idx = 0
+        for finger in fingers_order:
+            dip_id = f"{finger}_DIP"
+            mp_id = f"{finger}_MP"
+            for joint, sensor_id in [("DIP", dip_id), ("MP", mp_id)]:
+                if sensor_id not in FLEX_SENSOR_LABEL_BY_ID:
+                    continue
+                var = tk.IntVar(value=0)
+                label = FLEX_SENSOR_LABEL_BY_ID[sensor_id]
+                cb = ttk.Checkbutton(cb_frame, text=label, variable=var)
+                cb.grid(row=row_idx, column=0, sticky="w", padx=5)
+                self.multi_vars[sensor_id] = var
+                row_idx += 1
+
+        # ---- Multi‑finger plot canvas ----
+        self.multi_plot = PlotCanvas(self.plot_tab)
+        self.multi_plot.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
+        self.multi_plot.reset([], 0, 180)
+
+        self.plot_tab.rowconfigure(1, weight=1)   # single plot row
+        self.plot_tab.rowconfigure(3, weight=1)   # multi plot row
+
+    def start_multi_stream(self):
+        selected_ids = [sensor_id for sensor_id, var in self.multi_vars.items() if var.get() == 1]
+        if not selected_ids:
+            messagebox.showinfo("No selection", "Please tick at least one finger joint.")
+            return
+
+        sensor_index_map = {}
+        for idx, (sensor_id, _) in enumerate(FLEX_SENSORS):
+            sensor_index_map[sensor_id] = idx
+
+        self.active_multi_selection = selected_ids
+        self.active_multi_indices = [sensor_index_map[sid] for sid in selected_ids]
+
+        labels = [FLEX_SENSOR_LABEL_BY_ID[sid] for sid in selected_ids]
+        self.multi_plot.reset(labels, 0.0, 180.0)
+        self.multi_plot.grid()
+
+        self.active_stream_config = None
+        self.send_command("STREAM_MULTI_RAW")
+
+        self.multi_stream_active = True
+
+    def _handle_multi_plot_line(self, line):
+        values = parse_numeric_csv(line)
+        if len(values) < len(FLEX_SENSORS):
+            return
+
+        selected_raws = []
+        for idx in self.active_multi_indices:
+            if idx < len(values):
+                selected_raws.append(values[idx])
+            else:
+                selected_raws.append(0.0)
+
+        angles = []
+        for sensor_id, raw in zip(self.active_multi_selection, selected_raws):
+            angle = self._compute_angle_from_calibration(sensor_id, raw)
+            angles.append(angle)
+
+        now = time.monotonic()
+        if now - self.last_multi_plot_time >= 0.03:
+            self.multi_plot.add_values(angles, y_min=0.0, y_max=180.0)
+            self.latest_values.set("  ".join(
+                f"{lbl}: {a:.1f}°" for lbl, a in zip(self.active_multi_selection, angles)
+            ))
+            self.last_multi_plot_time = now
+
+    def _compute_angle_from_calibration(self, sensor_id, raw_adc):
+        """Use the stored calibration points to interpolate an angle (0‑180)."""
+        points = self.flex_calibration.get(sensor_id, {})
+        calib_list = []
+        for angle_str, adc_val in points.items():
+            if adc_val is not None:
+                calib_list.append((int(angle_str), adc_val))
+        if len(calib_list) < 2:
+            return 0.0   # not enough data
+        calib_list.sort(key=lambda x: x[0])  # sort by angle
+
+        angles = [p[0] for p in calib_list]
+        adcs   = [p[1] for p in calib_list]
+
+        increasing = adcs[-1] > adcs[0]
+        if increasing:
+            if raw_adc <= adcs[0]: return float(angles[0])
+            if raw_adc >= adcs[-1]: return float(angles[-1])
+            for i in range(len(adcs)-1):
+                if adcs[i] <= raw_adc <= adcs[i+1]:
+                    t = (raw_adc - adcs[i]) / (adcs[i+1] - adcs[i])
+                    return angles[i] + t * (angles[i+1] - angles[i])
+        else:
+            if raw_adc >= adcs[0]: return float(angles[0])
+            if raw_adc <= adcs[-1]: return float(angles[-1])
+            for i in range(len(adcs)-1):
+                if adcs[i] >= raw_adc >= adcs[i+1]:
+                    t = (adcs[i] - raw_adc) / (adcs[i] - adcs[i+1])
+                    return angles[i] + t * (angles[i+1] - angles[i])
+        return 0.0
+
+    def load_flex_calibration_from_json(self):
+        self._load_calibration_data()
+        self._refresh_flex_status()
+        if self.worker.is_connected:
+            self.restore_saved_flex_calibration()
+            self.status.set("Calibration loaded from JSON and sent to device")
+        else:
+            self.status.set("Calibration loaded from JSON (device not connected)")
 
     def refresh_ports(self):
         if list_ports is None:
@@ -395,7 +529,7 @@ class SensorGloveGUI(tk.Tk):
             return
         self.connect_button.configure(text="Disconnect")
         self.status.set(f"Connected to {port} at {BAUD_RATE}")
-        self.after(500, self.restore_saved_flex_calibration)
+        self.after(1500, self.restore_saved_flex_calibration)
 
     def send_command(self, command):
         try:
@@ -427,10 +561,26 @@ class SensorGloveGUI(tk.Tk):
             for angle, adc in points.items():
                 if adc is not None:
                     self.send_command(f"SET_FLEX {sensor_id} {angle} {adc}")
-
+                    time.sleep(0.02)
+    
     def start_stream(self):
         config = STREAMS[self.current_stream.get()]
         self.active_stream_config = config
+        if self.current_stream.get() == "Raw sensors":
+            labels = []
+            if self.raw_show_mp.get():
+                labels.append("MP raw")
+            if self.raw_show_dip.get():
+                labels.append("DIP raw")
+            if self.raw_show_fsr.get():
+                labels.append("FSR raw")
+            if not labels:   # at least one must be selected
+                labels = ["MP raw"]   # default fallback
+            config["labels"] = tuple(labels)
+        else:
+            # FSR raw stream – use its predefined label
+            pass
+
         self.plot.reset(config["labels"], config["y_min"], config["y_max"])
         self.latest_values.set("Waiting for data")
         self.send_command(config["command"])
@@ -441,6 +591,7 @@ class SensorGloveGUI(tk.Tk):
 
     def stop_stream(self):
         self.active_stream_config = None
+        self.multi_stream_active = False
         self.send_command("STOP")
 
     def _show_calibration_settings(self):
@@ -469,13 +620,16 @@ class SensorGloveGUI(tk.Tk):
         flex_data = data.get("flex", {})
         flex_sensors = flex_data.get("sensors")
         if isinstance(flex_sensors, dict):
-            for sensor_id, points in flex_sensors.items():
-                if sensor_id in self.flex_calibration and isinstance(points, dict):
-                    self._load_flex_points(sensor_id, points)
+            for sensor_id, sensor_data in flex_sensors.items():
+                if sensor_id not in self.flex_calibration:
+                    continue
+                angles_dict = sensor_data.get("angles", {}) if isinstance(sensor_data, dict) else {}
+                self._load_flex_points(sensor_id, angles_dict)
         else:
             legacy_points = flex_data.get("angles", {})
             if isinstance(legacy_points, dict):
                 self._load_flex_points(DEFAULT_FLEX_SENSOR_ID, legacy_points)
+        print("Loaded calibration:", self.flex_calibration)
 
     def _load_flex_points(self, sensor_id, points):
         for angle in FLEX_ANGLES:
@@ -513,6 +667,8 @@ class SensorGloveGUI(tk.Tk):
             self._append_log(line)
             self._handle_status_line(line)
             self._handle_plot_line(line)
+            if self.multi_stream_active:
+                self._handle_multi_plot_line(line)
         self.after(40, self._process_lines)
 
     def _append_log(self, line):
@@ -550,27 +706,40 @@ class SensorGloveGUI(tk.Tk):
     def _handle_plot_line(self, line):
         if not self.active_stream_config:
             return
+        config = self.active_stream_config
         values = parse_numeric_csv(line)
         if not values:
             return
 
-        labels = self.active_stream_config["labels"]
-        if len(values) < len(labels):
-            return
-
-        y_min = self.active_stream_config["y_min"]
-        y_max = self.active_stream_config["y_max"]
-        if len(values) >= len(labels) + 2:
-            y_min = values[-2]
-            y_max = values[-1]
-            values = values[: len(labels)]
+        if self.current_stream.get() == "Raw sensors":
+            # Values come as [MP, DIP, FSR] from the firmware.
+            # We need to pick the ones the user wants to see.
+            # Build a mask from the checkbuttons (same order)
+            mask = []
+            if self.raw_show_mp.get():
+                mask.append(0)   # MP is index 0
+            if self.raw_show_dip.get():
+                mask.append(1)   # DIP is index 1
+            if self.raw_show_fsr.get():
+                mask.append(2)   # FSR is index 2
+            if len(values) < 3:
+                return
+            selected = [values[i] for i in mask if i < len(values)]
+            labels = config["labels"]
+            if len(selected) != len(labels):
+                return
+            values = selected
         else:
-            values = values[: len(labels)]
+            if len(values) < len(config["labels"]):
+                return
+            values = values[: len(config["labels"])]
 
         now = time.monotonic()
         if now - self.last_plot_time >= 0.03:
-            self.plot.add_values(values, y_min, y_max)
-            self.latest_values.set("  ".join(f"{label}: {value:.2f}" for label, value in zip(labels, values)))
+            self.plot.add_values(values, config["y_min"], config["y_max"])
+            self.latest_values.set("  ".join(
+                f"{label}: {value:.2f}" for label, value in zip(config["labels"], values)
+            ))
             self.last_plot_time = now
 
     def _on_close(self):
