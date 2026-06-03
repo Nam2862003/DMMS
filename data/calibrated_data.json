@@ -1,6 +1,22 @@
 {
   "flex": {
     "sensors": {
+      "INDEX_DIP": {
+        "label": "Index Finger DIP",
+        "angles": {
+          "0": 2238,
+          "45": 2079,
+          "90": 1736
+        }
+      },
+      "INDEX_MP": {
+        "label": "Index Finger MP",
+        "angles": {
+          "0": 2378,
+          "45": 2072,
+          "90": 1724
+        }
+      },
       "MIDDLE_DIP": {
         "label": "Middle Finger DIP",
         "angles": {
@@ -15,6 +31,22 @@
           "0": 2383,
           "45": 2561,
           "90": 1839
+        }
+      },
+      "RING_DIP": {
+        "label": "Ring Finger DIP",
+        "angles": {
+          "0": 2382,
+          "45": 2095,
+          "90": 1559
+        }
+      },
+      "RING_MP": {
+        "label": "Ring Finger MP",
+        "angles": {
+          "0": 2397,
+          "45": 2060,
+          "90": 1713
         }
       }
     }

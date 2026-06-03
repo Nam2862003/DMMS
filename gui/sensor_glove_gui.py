@@ -35,6 +35,7 @@ FLEX_SENSORS = (
 FLEX_SENSOR_LABEL_BY_ID = {sensor_id: label for sensor_id, label in FLEX_SENSORS}
 FINGER_NAMES = ("INDEX", "MIDDLE", "RING")
 FINGERS = tuple(name.title() for name in FINGER_NAMES)
+HAND_OPTIONS = ("Right", "Left")
 
 # Joint sensors (DIP/MP) that support angle calibration
 FLEX_JOINTS = tuple((sid, lbl) for sid, lbl in FLEX_SENSORS if sid.endswith("_DIP") or sid.endswith("_MP"))
@@ -122,7 +123,7 @@ class SerialWorker:
 
 
 class PlotCanvas(tk.Canvas):
-    COLORS = ("#2563eb", "#dc2626", "#059669", "#9333ea")
+    COLORS = ("#2563eb", "#dc2626", "#059669", "#9333ea", "#f97316", "#14b8c6")
 
     def __init__(self, master):
         super().__init__(master, bg="#ffffff", highlightthickness=1, highlightbackground="#d7dde8")
@@ -206,6 +207,8 @@ class SensorGloveGUI(tk.Tk):
         self.lines = queue.Queue()
         self.worker = SerialWorker(self.lines.put)
         self.current_stream = tk.StringVar(value="Raw data")
+        self.current_hand = tk.StringVar(value="Right")
+        self.current_hand.trace_add("write", lambda *args: self._on_hand_changed())
         self.calibration_sensor = tk.StringVar(value="Flex Sensor (Angle)")
         self.flex_sensor = tk.StringVar(value=FLEX_SENSOR_LABEL_BY_ID[DEFAULT_FLEX_SENSOR_ID])
         self.flex_angle = tk.StringVar(value=FLEX_ANGLES[0])
@@ -244,7 +247,15 @@ class SensorGloveGUI(tk.Tk):
         ttk.Button(top, text="Refresh", command=self.refresh_ports).grid(row=0, column=2, padx=(0, 8))
         self.connect_button = ttk.Button(top, text="Connect", command=self.toggle_connection)
         self.connect_button.grid(row=0, column=3, padx=(0, 12))
-        ttk.Label(top, textvariable=self.status).grid(row=0, column=4, sticky="w")
+        ttk.Label(top, text="Hand").grid(row=0, column=4, sticky="w")
+        ttk.Combobox(
+            top,
+            textvariable=self.current_hand,
+            values=HAND_OPTIONS,
+            state="readonly",
+            width=10,
+        ).grid(row=0, column=5, sticky="w", padx=(8, 10))
+        ttk.Label(top, textvariable=self.status).grid(row=0, column=6, sticky="w")
 
         tabs = ttk.Notebook(self)
         tabs.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
@@ -466,7 +477,10 @@ class SensorGloveGUI(tk.Tk):
             sensor_index_map[sensor_id] = idx
 
         self.active_multi_selection = selected_ids
-        self.active_multi_indices = [sensor_index_map[sid] for sid in selected_ids]
+        self.active_multi_indices = [
+            sensor_index_map[self._logical_to_physical_flex(sensor_id)]
+            for sensor_id in selected_ids
+        ]
 
         labels = [FLEX_SENSOR_LABEL_BY_ID[sid] for sid in selected_ids]
         self.multi_plot.reset(labels, 0.0, 90.0)
@@ -504,7 +518,8 @@ class SensorGloveGUI(tk.Tk):
 
     def _compute_angle_from_calibration(self, sensor_id, raw_adc):
         """Use the stored calibration points to interpolate an angle (0‑90)."""
-        points = self.flex_calibration.get(sensor_id, {})
+        physical_id = self._logical_to_physical_flex(sensor_id)
+        points = self.flex_calibration.get(physical_id, {})
         calib_list = []
         for angle_str, adc_val in points.items():
             if adc_val is not None:
@@ -578,8 +593,9 @@ class SensorGloveGUI(tk.Tk):
             messagebox.showerror("Serial command failed", str(exc))
 
     def save_flex_angle(self):
-        sensor_id = self._selected_flex_sensor_id()
-        self.send_command(f"CAL_FLEX {sensor_id} {self.flex_angle.get()}")
+        logical_id = self._selected_flex_sensor_id()
+        physical_id = self._logical_to_physical_flex(logical_id)
+        self.send_command(f"CAL_FLEX {physical_id} {self.flex_angle.get()}")
 
     def clear_flex_calibration(self):
         for value in self.flex_status.values():
@@ -597,10 +613,10 @@ class SensorGloveGUI(tk.Tk):
     def restore_saved_flex_calibration(self):
         if not self.worker.is_connected:
             return
-        for sensor_id, points in self.flex_calibration.items():
+        for physical_id, points in self.flex_calibration.items():
             for angle, adc in points.items():
                 if adc is not None:
-                    self.send_command(f"SET_FLEX {sensor_id} {angle} {adc}")
+                    self.send_command(f"SET_FLEX {physical_id} {angle} {adc}")
                     time.sleep(0.02)
     
     def start_stream(self):
@@ -657,22 +673,55 @@ class SensorGloveGUI(tk.Tk):
 
     def _raw_sensor_command(self):
         finger = self.raw_finger.get().upper()
+        left = self.current_hand.get() == "Left"
         if finger == "INDEX":
-            return "STREAM_RAW_INDEX"
+            return "STREAM_RAW_RING" if left else "STREAM_RAW_INDEX"
         if finger == "MIDDLE":
             return "STREAM_RAW_MIDDLE"
         if finger == "RING":
-            return "STREAM_RAW_RING"
+            return "STREAM_RAW_INDEX" if left else "STREAM_RAW_RING"
         return "STREAM_RAW_MIDDLE"
+
+    def _is_left_hand(self):
+        return self.current_hand.get() == "Left"
+
+    def _logical_to_physical_flex(self, sensor_id: str) -> str:
+        """Map a logical flex sensor id to the physical id the firmware expects.
+
+        When Left hand is selected, swap INDEX <-> RING. Middle stays the same.
+        """
+        if not self._is_left_hand():
+            return sensor_id
+        if sensor_id.startswith("INDEX_"):
+            return sensor_id.replace("INDEX_", "RING_", 1)
+        if sensor_id.startswith("RING_"):
+            return sensor_id.replace("RING_", "INDEX_", 1)
+        return sensor_id
+
+    def _physical_to_logical_flex(self, sensor_id: str) -> str:
+        """Inverse of _logical_to_physical_flex: map firmware-reported id to logical id."""
+        # mapping is symmetric
+        return self._logical_to_physical_flex(sensor_id)
 
     def _selected_flex_sensor_id(self):
         return FLEX_SENSOR_ID_BY_LABEL.get(self.flex_sensor.get(), DEFAULT_FLEX_SENSOR_ID)
 
     def _refresh_flex_status(self):
-        points = self.flex_calibration[self._selected_flex_sensor_id()]
+        logical_id = self._selected_flex_sensor_id()
+        physical_id = self._logical_to_physical_flex(logical_id)
+        points = self.flex_calibration.get(physical_id, {})
         for angle in FLEX_ANGLES:
             adc = points.get(angle)
             self.flex_status[angle].set(f"ADC {adc} (saved)" if adc is not None else "Not saved")
+
+    def _on_hand_changed(self):
+        self._refresh_flex_status()
+        if self.active_stream_config and self.current_stream.get() == "Raw data":
+            self.stop_stream()
+            self.start_stream()
+        elif self.multi_stream_active:
+            self.stop_stream()
+            self.start_multi_stream()
 
     def _load_calibration_data(self):
         if not CALIBRATION_DATA_FILE.exists():
@@ -686,10 +735,13 @@ class SensorGloveGUI(tk.Tk):
         flex_sensors = flex_data.get("sensors")
         if isinstance(flex_sensors, dict):
             for sensor_id, sensor_data in flex_sensors.items():
-                if sensor_id not in self.flex_calibration:
+                physical_id = sensor_id
+                if physical_id not in self.flex_calibration:
+                    physical_id = self._logical_to_physical_flex(sensor_id)
+                if physical_id not in self.flex_calibration:
                     continue
                 angles_dict = sensor_data.get("angles", {}) if isinstance(sensor_data, dict) else {}
-                self._load_flex_points(sensor_id, angles_dict)
+                self._load_flex_points(physical_id, angles_dict)
         else:
             legacy_points = flex_data.get("angles", {})
             if isinstance(legacy_points, dict):
@@ -753,6 +805,7 @@ class SensorGloveGUI(tk.Tk):
                 value.set("Not saved")
 
     def _handle_flex_calibration_line(self, sensor_id, angle, adc, complete):
+        # sensor_id from device is physical; store it by physical id.
         if sensor_id not in self.flex_calibration or angle not in FLEX_ANGLES:
             return
         try:
@@ -761,11 +814,13 @@ class SensorGloveGUI(tk.Tk):
             return
         self.flex_calibration[sensor_id][angle] = adc_value
         self._save_calibration_data()
-        if sensor_id == self._selected_flex_sensor_id():
+        logical_id = self._physical_to_logical_flex(sensor_id)
+        if logical_id == self._selected_flex_sensor_id():
             self.flex_status[angle].set(f"ADC {adc_value} ({complete.lower()})")
 
     def _handle_flex_restore_line(self, sensor_id, angle, adc, complete):
-        if sensor_id == self._selected_flex_sensor_id() and angle in FLEX_ANGLES:
+        logical_id = self._physical_to_logical_flex(sensor_id)
+        if logical_id == self._selected_flex_sensor_id() and angle in FLEX_ANGLES:
             self.flex_status[angle].set(f"ADC {adc} ({complete.lower()})")
 
     def _handle_plot_line(self, line):
@@ -794,6 +849,20 @@ class SensorGloveGUI(tk.Tk):
             if len(selected) != len(labels):
                 return
             values = selected
+        elif self.current_stream.get() == "All flex sensors" and self._is_left_hand():
+            # Firmware sends values in right-hand order: Index, Middle, Ring.
+            # For left-hand use, swap index and ring value groups.
+            if len(values) < 6:
+                return
+            values = [
+                values[4], values[5],  # logical Index values from physical Ring
+                values[2], values[3],  # Middle unchanged
+                values[0], values[1],  # logical Ring values from physical Index
+            ]
+        elif self.current_stream.get() == "All FSR sensors" and self._is_left_hand():
+            if len(values) < 3:
+                return
+            values = [values[2], values[1], values[0]]
         else:
             if len(values) < len(config["labels"]):
                 return
