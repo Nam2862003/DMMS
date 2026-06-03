@@ -21,30 +21,49 @@ BAUD_RATE = 115200
 MAX_POINTS = 240
 FLEX_ANGLES = ("0", "45", "90")
 FLEX_SENSORS = (
-    ("MIDDLE_DIP", "Middle Finger DIP"),
-    ("MIDDLE_MP", "Middle Finger MP"),
+    ("INDEX_FSR", "Index FSR"),
     ("INDEX_DIP", "Index Finger DIP"),
     ("INDEX_MP", "Index Finger MP"),
+    ("MIDDLE_FSR", "Middle FSR"),
+    ("MIDDLE_DIP", "Middle Finger DIP"),
+    ("MIDDLE_MP", "Middle Finger MP"),
+    ("RING_FSR", "Ring FSR"),
     ("RING_DIP", "Ring Finger DIP"),
     ("RING_MP", "Ring Finger MP"),
 )
-FLEX_SENSOR_LABELS = tuple(label for _sensor_id, label in FLEX_SENSORS)
-FLEX_SENSOR_ID_BY_LABEL = {label: sensor_id for sensor_id, label in FLEX_SENSORS}
+# All sensor labels by id (used for display and multi‑stream indexing)
 FLEX_SENSOR_LABEL_BY_ID = {sensor_id: label for sensor_id, label in FLEX_SENSORS}
-DEFAULT_FLEX_SENSOR_ID = FLEX_SENSORS[0][0]
+FINGER_NAMES = ("INDEX", "MIDDLE", "RING")
+FINGERS = tuple(name.title() for name in FINGER_NAMES)
+
+# Joint sensors (DIP/MP) that support angle calibration
+FLEX_JOINTS = tuple((sid, lbl) for sid, lbl in FLEX_SENSORS if sid.endswith("_DIP") or sid.endswith("_MP"))
+FLEX_SENSOR_LABELS = tuple(label for _sid, label in FLEX_JOINTS)
+FLEX_SENSOR_ID_BY_LABEL = {label: sid for sid, label in FLEX_JOINTS}
+DEFAULT_FLEX_SENSOR_ID = "MIDDLE_DIP"
 CALIBRATION_DATA_FILE = Path(__file__).resolve().parents[1] / "data" / "calibrated_data.json"
 
 
 STREAMS = {
-    "Raw sensors": {
-        "command": "STREAM_RAW",
+    "Raw data": {
+        "command": None,
         "labels": ("MP raw", "DIP raw", "FSR raw"),
         "y_min": 0.0,
         "y_max": 4095.0,
     },
-    "FSR raw": {
-        "command": "STREAM_FSR",
-        "labels": ("FSR raw",),
+    "All flex sensors": {
+        "command": "STREAM_ALL_SENSORS",
+        "labels": (
+            "Index DIP", "Index MP",
+            "Middle DIP", "Middle MP",
+            "Ring DIP", "Ring MP",
+        ),
+        "y_min": 0.0,
+        "y_max": 4095.0,
+    },
+    "All FSR sensors": {
+        "command": "STREAM_FSR_ALL",
+        "labels": ("Index FSR", "Middle FSR", "Ring FSR"),
         "y_min": 0.0,
         "y_max": 4095.0,
     },
@@ -186,7 +205,7 @@ class SensorGloveGUI(tk.Tk):
 
         self.lines = queue.Queue()
         self.worker = SerialWorker(self.lines.put)
-        self.current_stream = tk.StringVar(value="Raw sensors")
+        self.current_stream = tk.StringVar(value="Raw data")
         self.calibration_sensor = tk.StringVar(value="Flex Sensor (Angle)")
         self.flex_sensor = tk.StringVar(value=FLEX_SENSOR_LABEL_BY_ID[DEFAULT_FLEX_SENSOR_ID])
         self.flex_angle = tk.StringVar(value=FLEX_ANGLES[0])
@@ -195,7 +214,7 @@ class SensorGloveGUI(tk.Tk):
         self.flex_status = {angle: tk.StringVar(value="Not saved") for angle in FLEX_ANGLES}
         self.flex_calibration = {
             sensor_id: {angle: None for angle in FLEX_ANGLES}
-            for sensor_id, _label in FLEX_SENSORS
+            for sensor_id, _label in FLEX_JOINTS
         }
         self.active_stream_config = None
         self.last_plot_time = 0.0
@@ -280,6 +299,12 @@ class SensorGloveGUI(tk.Tk):
         )
         flex_sensor_combo.grid(row=0, column=1, sticky="w")
         flex_sensor_combo.bind("<<ComboboxSelected>>", lambda _event: self._refresh_flex_status())
+        
+        try:
+            self.flex_sensor.set(FLEX_SENSOR_LABEL_BY_ID[DEFAULT_FLEX_SENSOR_ID])
+        except Exception:
+            pass
+        self._refresh_flex_status()
 
         # Row 1 – angle selector + action buttons
         action_row = ttk.Frame(flex_tab)
@@ -347,8 +372,8 @@ class SensorGloveGUI(tk.Tk):
         self.plot_tab.columnconfigure(0, weight=1)
         self.plot_tab.rowconfigure(1, weight=1)
 
-        # ---- Single‑stream controls ----
-        single_frame = ttk.LabelFrame(self.plot_tab, text="Single sensor stream", padding=8)
+        # ---- Raw data stream controls ----
+        single_frame = ttk.LabelFrame(self.plot_tab, text="Raw data stream", padding=8)
         single_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         single_controls = ttk.Frame(single_frame)
         single_controls.pack(fill="x")
@@ -361,27 +386,42 @@ class SensorGloveGUI(tk.Tk):
             state="readonly",
         )
         stream_combo.pack(side="left", padx=(8, 10))
+        stream_combo.bind("<<ComboboxSelected>>", lambda _event: self._update_single_stream_controls())
+
+        self.raw_finger_label = ttk.Label(single_controls, text="Finger")
+        self.raw_finger_label.pack(side="left")
+        self.raw_finger = tk.StringVar(value="MIDDLE")
+        self.raw_finger_combo = ttk.Combobox(
+            single_controls,
+            textvariable=self.raw_finger,
+            values=FINGERS,
+            state="readonly",
+            width=12,
+        )
+        self.raw_finger_combo.pack(side="left", padx=(8, 10))
         ttk.Button(single_controls, text="Start Plot", command=self.start_stream).pack(side="left", padx=(0, 8))
         ttk.Button(single_controls, text="Stop", command=self.stop_stream).pack(side="left", padx=(0, 14))
-        ttk.Label(single_controls, textvariable=self.latest_values).pack(side="left")
 
-        # Checkbuttons for raw sensor selection (only for Raw sensors stream)
-        raw_sel_frame = ttk.Frame(single_frame)
-        raw_sel_frame.pack(fill="x", pady=(5, 0))
+        self.raw_sel_frame = ttk.Frame(single_frame)
+        self.raw_sel_frame.pack(fill="x", pady=(5, 0))
         self.raw_show_mp = tk.IntVar(value=1)
         self.raw_show_dip = tk.IntVar(value=1)
         self.raw_show_fsr = tk.IntVar(value=1)
-        ttk.Checkbutton(raw_sel_frame, text="MP", variable=self.raw_show_mp).pack(side="left", padx=5)
-        ttk.Checkbutton(raw_sel_frame, text="DIP", variable=self.raw_show_dip).pack(side="left", padx=5)
-        ttk.Checkbutton(raw_sel_frame, text="FSR", variable=self.raw_show_fsr).pack(side="left", padx=5)
+        ttk.Checkbutton(self.raw_sel_frame, text="MP", variable=self.raw_show_mp).pack(side="left", padx=5)
+        ttk.Checkbutton(self.raw_sel_frame, text="DIP", variable=self.raw_show_dip).pack(side="left", padx=5)
+        ttk.Checkbutton(self.raw_sel_frame, text="FSR", variable=self.raw_show_fsr).pack(side="left", padx=5)
+
+        self.latest_values_label = ttk.Label(single_frame, textvariable=self.latest_values)
+        self.latest_values_label.pack(fill="x", pady=(6, 0))
 
         # ---- Single‑stream plot canvas ----
         self.plot = PlotCanvas(self.plot_tab)
         self.plot.grid(row=1, column=0, sticky="nsew")
         initial = STREAMS[self.current_stream.get()]
         self.plot.reset(initial["labels"], initial["y_min"], initial["y_max"])
+        self._update_single_stream_controls()
 
-        multi_frame = ttk.LabelFrame(self.plot_tab, text="Multi‑finger plot", padding=8)
+        multi_frame = ttk.LabelFrame(self.plot_tab, text="Multi‑finger angle plot", padding=8)
         multi_frame.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         multi_controls = ttk.Frame(multi_frame)
         multi_controls.pack(fill="x")
@@ -546,7 +586,7 @@ class SensorGloveGUI(tk.Tk):
             value.set("Not saved")
         self.flex_calibration = {
             sensor_id: {angle: None for angle in FLEX_ANGLES}
-            for sensor_id, _label in FLEX_SENSORS
+            for sensor_id, _label in FLEX_JOINTS
         }
         self._clear_calibration_data_file()
         if self.worker.is_connected:
@@ -564,26 +604,30 @@ class SensorGloveGUI(tk.Tk):
                     time.sleep(0.02)
     
     def start_stream(self):
-        config = STREAMS[self.current_stream.get()]
-        self.active_stream_config = config
-        if self.current_stream.get() == "Raw sensors":
-            labels = []
-            if self.raw_show_mp.get():
-                labels.append("MP raw")
-            if self.raw_show_dip.get():
-                labels.append("DIP raw")
-            if self.raw_show_fsr.get():
-                labels.append("FSR raw")
-            if not labels:   # at least one must be selected
-                labels = ["MP raw"]   # default fallback
-            config["labels"] = tuple(labels)
+        selection = self.current_stream.get()
+        config = dict(STREAMS[selection])
+        if selection == "Raw data":
+            config["labels"] = self._raw_sensor_labels()
+            command = self._raw_sensor_command()
         else:
-            # FSR raw stream – use its predefined label
-            pass
+            command = config["command"]
 
+        self.active_stream_config = config
         self.plot.reset(config["labels"], config["y_min"], config["y_max"])
         self.latest_values.set("Waiting for data")
-        self.send_command(config["command"])
+        self.send_command(command)
+
+    def _update_single_stream_controls(self):
+        selection = self.current_stream.get()
+        visible = selection == "Raw data"
+        if visible:
+            self.raw_finger_label.pack(side="left")
+            self.raw_finger_combo.pack(side="left", padx=(8, 10))
+            self.raw_sel_frame.pack(fill="x", pady=(5, 0))
+        else:
+            self.raw_finger_label.pack_forget()
+            self.raw_finger_combo.pack_forget()
+            self.raw_sel_frame.pack_forget()
 
     def _start_named_stream(self, stream_name):
         self.current_stream.set(stream_name)
@@ -599,6 +643,27 @@ class SensorGloveGUI(tk.Tk):
             self.fsr_settings.tkraise()
         else:
             self.flex_settings.tkraise()
+
+    def _raw_sensor_labels(self):
+        base = self.raw_finger.get().title()
+        labels = []
+        if self.raw_show_mp.get():
+            labels.append(f"{base} MP raw")
+        if self.raw_show_dip.get():
+            labels.append(f"{base} DIP raw")
+        if self.raw_show_fsr.get():
+            labels.append(f"{base} FSR raw")
+        return labels or [f"{base} MP raw"]
+
+    def _raw_sensor_command(self):
+        finger = self.raw_finger.get().upper()
+        if finger == "INDEX":
+            return "STREAM_RAW_INDEX"
+        if finger == "MIDDLE":
+            return "STREAM_RAW_MIDDLE"
+        if finger == "RING":
+            return "STREAM_RAW_RING"
+        return "STREAM_RAW_MIDDLE"
 
     def _selected_flex_sensor_id(self):
         return FLEX_SENSOR_ID_BY_LABEL.get(self.flex_sensor.get(), DEFAULT_FLEX_SENSOR_ID)
@@ -711,7 +776,7 @@ class SensorGloveGUI(tk.Tk):
         if not values:
             return
 
-        if self.current_stream.get() == "Raw sensors":
+        if self.current_stream.get() == "Raw data":
             # Values come as [MP, DIP, FSR] from the firmware.
             # We need to pick the ones the user wants to see.
             # Build a mask from the checkbuttons (same order)

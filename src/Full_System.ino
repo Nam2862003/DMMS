@@ -9,10 +9,15 @@
  *   SET_FLEX <sensor_id> <angle> <adc>
  *                     Loads a saved flex calibration point from the GUI
  *   CLEAR_FLEX        Clears flex calibration points
- *   STREAM_RAW        Streams MP raw, PIP raw, FSR raw
- *   STREAM_MIXED      Streams MP raw, flex angle if calibrated, FSR raw
- *   STREAM_FLEX       Streams flex angle if calibrated
- *   STREAM_FSR        Streams FSR raw ADC
+ *   STREAM_RAW        Streams middle finger MP raw, DIP raw, FSR raw
+ *   STREAM_RAW_INDEX  Streams index finger MP raw, DIP raw, FSR raw
+ *   STREAM_RAW_MIDDLE Streams middle finger MP raw, DIP raw, FSR raw
+ *   STREAM_RAW_RING   Streams ring finger MP raw, DIP raw, FSR raw
+ *   STREAM_ALL_SENSORS Streams FSR,DIP,MP for index, middle, ring
+ *   STREAM_MIXED      Streams MP raw, flex angle if calibrated, FSR raw (middle finger)
+ *   STREAM_FLEX       Streams flex angle if calibrated (middle finger)
+ *   STREAM_FSR        Streams middle finger FSR raw ADC
+ *   STREAM_FSR_ALL    Streams FSR raw ADC for index, middle, and ring
  *   STOP              Stops streaming
  */
 
@@ -24,9 +29,19 @@ const int S3  = 32;
 const int SIG = 34;
 
 // === Mux channel assignments ===
-const int CH_PRESSURE = 8;
-const int CH_FLEX_DIP = 7;
-const int CH_FLEX_MP  = 6;
+const int CH_RING_FSR   = 8;
+const int CH_RING_DIP   = 7;
+const int CH_RING_MP    = 6;
+const int CH_MIDDLE_FSR = 5;
+const int CH_MIDDLE_DIP = 4;
+const int CH_MIDDLE_MP  = 3;
+const int CH_INDEX_FSR  = 2;
+const int CH_INDEX_DIP  = 1;
+const int CH_INDEX_MP   = 0;
+
+const int CH_PRESSURE = CH_MIDDLE_FSR;
+const int CH_FLEX_DIP = CH_MIDDLE_DIP;
+const int CH_FLEX_MP  = CH_MIDDLE_MP;
 
 // === Settings ===
 const int OVERSAMPLE    = 10;
@@ -46,13 +61,14 @@ const char* flexSensorIds[FLEX_SENSOR_COUNT] = {
   "RING_DIP",
   "RING_MP"
 };
+// Map each flex sensor (DIP/MP) to its mux channel. Order matches flexSensorIds above.
 const int flexSensorChannels[FLEX_SENSOR_COUNT] = {
-  CH_FLEX_DIP,
-  CH_FLEX_MP,
-  -1,
-  -1,
-  -1,
-  -1
+  CH_MIDDLE_DIP, // MIDDLE_DIP
+  CH_MIDDLE_MP,  // MIDDLE_MP
+  CH_INDEX_DIP,  // INDEX_DIP
+  CH_INDEX_MP,   // INDEX_MP
+  CH_RING_DIP,   // RING_DIP
+  CH_RING_MP     // RING_MP
 };
 int flexCalibADC[FLEX_SENSOR_COUNT][FLEX_CALIB_POINTS] = {0};
 bool flexCalibSet[FLEX_SENSOR_COUNT][FLEX_CALIB_POINTS] = {false};
@@ -65,9 +81,14 @@ int flexBufIdx[FLEX_SENSOR_COUNT] = {0};
 enum StreamMode {
   STREAM_NONE,
   STREAM_RAW,
+  STREAM_RAW_INDEX,
+  STREAM_RAW_MIDDLE,
+  STREAM_RAW_RING,
+  STREAM_ALL_SENSORS,
   STREAM_MIXED,
   STREAM_FLEX,
   STREAM_FSR,
+  STREAM_FSR_ALL,
   STREAM_MULTI_RAW
 };
 
@@ -85,9 +106,14 @@ int findFlexAngleIndex(int angle);
 int defaultFlexSensorIndex();
 void streamCurrentData();
 void streamRaw();
+void streamRawIndex();
+void streamRawMiddle();
+void streamRawRing();
+void streamAllSensors();
 void streamMixed();
 void streamFlex();
 void streamFsr();
+void streamFsrAll();
 int readMux(uint8_t channel);
 int readMuxAveraged(int channel);
 int bufferAverage(int buf[]);
@@ -157,6 +183,35 @@ void handleCommand(String command) {
   } else if (command == "STREAM_RAW") {
     streamMode = STREAM_RAW;
     Serial.println(F("ACK,STREAM_RAW"));
+  } else if (command == "STREAM_RAW_INDEX") {
+    streamMode = STREAM_RAW_INDEX;
+    Serial.println(F("ACK,STREAM_RAW_INDEX"));
+  } else if (command == "STREAM_RAW_MIDDLE") {
+    streamMode = STREAM_RAW_MIDDLE;
+    Serial.println(F("ACK,STREAM_RAW_MIDDLE"));
+  } else if (command == "STREAM_RAW_RING") {
+    streamMode = STREAM_RAW_RING;
+    Serial.println(F("ACK,STREAM_RAW_RING"));
+  } else if (command == "STREAM_ALL_SENSORS") {
+    streamMode = STREAM_ALL_SENSORS;
+    Serial.println(F("ACK,STREAM_ALL_SENSORS"));
+  } else if (command == "STREAM_FSR_ALL") {
+    streamMode = STREAM_FSR_ALL;
+    Serial.println(F("ACK,STREAM_FSR_ALL"));
+  } else if (command.startsWith("STREAM_RAW_")) {
+    if (command.endsWith("_INDEX") || command.endsWith("INDEX")) {
+      streamMode = STREAM_RAW_INDEX;
+      Serial.println(F("ACK,STREAM_RAW_INDEX"));
+    } else if (command.endsWith("_MIDDLE") || command.endsWith("MIDDLE")) {
+      streamMode = STREAM_RAW_MIDDLE;
+      Serial.println(F("ACK,STREAM_RAW_MIDDLE"));
+    } else if (command.endsWith("_RING") || command.endsWith("RING")) {
+      streamMode = STREAM_RAW_RING;
+      Serial.println(F("ACK,STREAM_RAW_RING"));
+    } else {
+      Serial.print(F("ERR,UNKNOWN_COMMAND,"));
+      Serial.println(command);
+    }
   } else if (command == "STREAM_MIXED") {
     streamMode = STREAM_MIXED;
     Serial.println(F("ACK,STREAM_MIXED"));
@@ -166,6 +221,9 @@ void handleCommand(String command) {
   } else if (command == "STREAM_FSR") {
     streamMode = STREAM_FSR;
     Serial.println(F("ACK,STREAM_FSR"));
+  } else if (command == "STREAM_FSR_ALL") {
+    streamMode = STREAM_FSR_ALL;
+    Serial.println(F("ACK,STREAM_FSR_ALL"));
   } else if (command == "STREAM_MULTI_RAW") {
     streamMode = STREAM_MULTI_RAW;
     Serial.println(F("ACK,STREAM_MULTI_RAW"));
@@ -294,16 +352,22 @@ int defaultFlexSensorIndex() {
 
 void streamCurrentData() {
   switch (streamMode) {
-    case STREAM_RAW:   streamRaw();   break;
-    case STREAM_MIXED: streamMixed(); break;
-    case STREAM_FLEX:  streamFlex();  break;
-    case STREAM_FSR:   streamFsr();   break;
-    case STREAM_MULTI_RAW: streamMultiRaw(); break;
-    case STREAM_NONE:  break;
+    case STREAM_RAW:         streamRaw();        break;
+    case STREAM_RAW_INDEX:   streamRawIndex();   break;
+    case STREAM_RAW_MIDDLE:  streamRawMiddle();  break;
+    case STREAM_RAW_RING:    streamRawRing();    break;
+    case STREAM_ALL_SENSORS: streamAllSensors(); break;
+    case STREAM_MIXED:       streamMixed();      break;
+    case STREAM_FLEX:        streamFlex();       break;
+    case STREAM_FSR:         streamFsr();        break;
+    case STREAM_FSR_ALL:     streamFsrAll();     break;
+    case STREAM_MULTI_RAW:   streamMultiRaw();   break;
+    case STREAM_NONE:        break;
   }
 }
 
 void streamRaw() {
+  // Default raw stream reports middle finger MP, DIP, then FSR (pressure)
   Serial.print(readMuxAveraged(CH_FLEX_MP));
   Serial.print(F(","));
   Serial.print(readMuxAveraged(CH_FLEX_DIP));
@@ -329,6 +393,51 @@ void streamMixed() {
   Serial.println(F(",0,4095"));
 }
 
+void streamRawIndex() {
+  Serial.print(readMuxAveraged(CH_INDEX_MP));
+  Serial.print(F(","));
+  Serial.print(readMuxAveraged(CH_INDEX_DIP));
+  Serial.print(F(","));
+  Serial.println(readMuxAveraged(CH_INDEX_FSR));
+}
+
+void streamRawMiddle() {
+  Serial.print(readMuxAveraged(CH_MIDDLE_MP));
+  Serial.print(F(","));
+  Serial.print(readMuxAveraged(CH_MIDDLE_DIP));
+  Serial.print(F(","));
+  Serial.println(readMuxAveraged(CH_MIDDLE_FSR));
+}
+
+void streamRawRing() {
+  Serial.print(readMuxAveraged(CH_RING_MP));
+  Serial.print(F(","));
+  Serial.print(readMuxAveraged(CH_RING_DIP));
+  Serial.print(F(","));
+  Serial.println(readMuxAveraged(CH_RING_FSR));
+}
+
+void streamAllSensors() {
+  int channels[6] = {
+    CH_INDEX_DIP, CH_INDEX_MP,
+    CH_MIDDLE_DIP, CH_MIDDLE_MP,
+    CH_RING_DIP, CH_RING_MP
+  };
+  for (int i = 0; i < 6; i++) {
+    Serial.print(readMuxAveraged(channels[i]));
+    if (i < 5) Serial.print(',');
+  }
+  Serial.println();
+}
+
+void streamFsrAll() {
+  Serial.print(readMuxAveraged(CH_INDEX_FSR));
+  Serial.print(F(","));
+  Serial.print(readMuxAveraged(CH_MIDDLE_FSR));
+  Serial.print(F(","));
+  Serial.println(readMuxAveraged(CH_RING_FSR));
+}
+
 void streamFlex() {
   int sensorIndex = defaultFlexSensorIndex();
   if (!flexCalibrated[sensorIndex]) {
@@ -351,16 +460,14 @@ void streamFsr() {
 }
 
 void streamMultiRaw() {
-  // Order must match what the GUI expects.
-  // For each finger, DIP then MP.
-  // Example: MIDDLE_DIP, MIDDLE_MP, INDEX_DIP, INDEX_MP, RING_DIP, RING_MP
-  for (int i = 0; i < FLEX_SENSOR_COUNT; i++) {
-    if (flexSensorChannels[i] >= 0) {
-      Serial.print(readMuxAveraged(flexSensorChannels[i]));
-    } else {
-      Serial.print(0);  // placeholder for missing sensor
-    }
-    if (i < FLEX_SENSOR_COUNT - 1) Serial.print(',');
+  int channels[9] = {
+    CH_INDEX_FSR, CH_INDEX_DIP, CH_INDEX_MP,
+    CH_MIDDLE_FSR, CH_MIDDLE_DIP, CH_MIDDLE_MP,
+    CH_RING_FSR, CH_RING_DIP, CH_RING_MP
+  };
+  for (int i = 0; i < 9; i++) {
+    Serial.print(readMuxAveraged(channels[i]));
+    if (i < 8) Serial.print(',');
   }
   Serial.println();
 }
