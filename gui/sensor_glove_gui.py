@@ -19,7 +19,7 @@ import itertools
 
 BAUD_RATE = 115200
 MAX_POINTS = 240
-FLEX_ANGLES = ("0", "45", "90", "180")
+FLEX_ANGLES = ("0", "45", "90")
 FLEX_SENSORS = (
     ("MIDDLE_DIP", "Middle Finger DIP"),
     ("MIDDLE_MP", "Middle Finger MP"),
@@ -410,7 +410,7 @@ class SensorGloveGUI(tk.Tk):
         # ---- Multi‑finger plot canvas ----
         self.multi_plot = PlotCanvas(self.plot_tab)
         self.multi_plot.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
-        self.multi_plot.reset([], 0, 180)
+        self.multi_plot.reset([], 0, 90)
 
         self.plot_tab.rowconfigure(1, weight=1)   # single plot row
         self.plot_tab.rowconfigure(3, weight=1)   # multi plot row
@@ -429,7 +429,7 @@ class SensorGloveGUI(tk.Tk):
         self.active_multi_indices = [sensor_index_map[sid] for sid in selected_ids]
 
         labels = [FLEX_SENSOR_LABEL_BY_ID[sid] for sid in selected_ids]
-        self.multi_plot.reset(labels, 0.0, 180.0)
+        self.multi_plot.reset(labels, 0.0, 90.0)
         self.multi_plot.grid()
 
         self.active_stream_config = None
@@ -456,14 +456,14 @@ class SensorGloveGUI(tk.Tk):
 
         now = time.monotonic()
         if now - self.last_multi_plot_time >= 0.03:
-            self.multi_plot.add_values(angles, y_min=0.0, y_max=180.0)
+            self.multi_plot.add_values(angles, y_min=0.0, y_max=90.0)
             self.latest_values.set("  ".join(
                 f"{lbl}: {a:.1f}°" for lbl, a in zip(self.active_multi_selection, angles)
             ))
             self.last_multi_plot_time = now
 
     def _compute_angle_from_calibration(self, sensor_id, raw_adc):
-        """Use the stored calibration points to interpolate an angle (0‑180)."""
+        """Use the stored calibration points to interpolate an angle (0‑90)."""
         points = self.flex_calibration.get(sensor_id, {})
         calib_list = []
         for angle_str, adc_val in points.items():

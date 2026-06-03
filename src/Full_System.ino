@@ -5,7 +5,7 @@
  *
  * GUI command protocol, 115200 baud:
  *   CAL_FLEX <sensor_id> <angle>
- *                     Captures flex ADC for angle 0, 45, 90, or 180
+ *                     Captures flex ADC for angle 0, 45, or 90
  *   SET_FLEX <sensor_id> <angle> <adc>
  *                     Loads a saved flex calibration point from the GUI
  *   CLEAR_FLEX        Clears flex calibration points
@@ -35,9 +35,9 @@ const int LOOP_DELAY_MS = 50;
 const int LED_PIN       = 2;
 
 // === Flex angle calibration ===
-const int FLEX_CALIB_POINTS = 4;
+const int FLEX_CALIB_POINTS = 3;
 const int FLEX_SENSOR_COUNT = 6;
-const int flexAngles[FLEX_CALIB_POINTS] = {0, 45, 90, 180};
+const int flexAngles[FLEX_CALIB_POINTS] = {0, 45, 90};
 const char* flexSensorIds[FLEX_SENSOR_COUNT] = {
   "MIDDLE_DIP",
   "MIDDLE_MP",
@@ -342,7 +342,7 @@ void streamFlex() {
   int filtered = bufferAverage(flexBuffer[sensorIndex]);
 
   Serial.print(interpolateFlexAngle(sensorIndex, filtered), 1);
-  Serial.println(F(",0,180"));
+  Serial.println(F(",0,90"));
 }
 
 void streamFsr() {
